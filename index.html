@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>包裹取貨看板（自動查詢版）</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { -webkit-tap-highlight-color: transparent; }
+    .toast-enter { animation: slideUp 0.25s ease-out forwards; }
+    @keyframes slideUp {
+      from { transform: translate(-50%, 20px); opacity: 0; }
+      to { transform: translate(-50%, 0); opacity: 1; }
+    }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-800 min-h-screen pb-20">
+
+  <header class="bg-white border-b border-slate-200 sticky top-0 z-10">
+    <div class="max-w-2xl mx-auto px-4 py-4 flex items-center justify-between">
+      <div>
+        <h1 class="text-xl font-bold text-slate-900">包裹取貨看板</h1>
+        <p class="text-xs text-slate-500 mt-0.5">點擊單號複製並開官網，或按「查貨態」自動更新</p>
+      </div>
+      <div class="flex gap-3 text-center">
+        <div class="bg-amber-50 px-3 py-1.5 rounded-lg border border-amber-200">
+          <div id="count-arrived" class="text-lg font-bold text-amber-600 leading-none">0</div>
+          <div class="text-[11px] text-amber-700 mt-1">待取貨</div>
+        </div>
+        <div class="bg-blue-50 px-3 py-1.5 rounded-lg border border-blue-200">
+          <div id="count-shipping" class="text-lg font-bold text-blue-600 leading-none">0</div>
+          <div class="text-[11px] text-blue-700 mt-1">運送中</div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-2xl mx-auto px-4 pt-5 space-y-6">
+
+    <section class="bg-white p-4 rounded-2xl shadow-sm border border-slate-200">
+      <form id="add-form" class="space-y-3">
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">物流單號 *</label>
+            <input type="text" id="tracking-input" required placeholder="貼上單號（自動辨識物流）"
+              class="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-slate-800" />
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">商品備註</label>
+            <input type="text" id="name-input" placeholder="例如：運動鞋、手機殼"
+              class="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-slate-800" />
+          </div>
+        </div>
+        <div class="flex items-center justify-between gap-3 pt-1">
+          <select id="carrier-select"
+            class="px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-sm text-slate-700 focus:outline-none">
+            <option value="auto">自動偵測物流商</option>
+            <option value="711">7-11 交貨便</option>
+            <option value="family">全家店到店</option>
+            <option value="shopee">蝦皮店到店</option>
+            <option value="tcat">黑貓宅急便</option>
+            <option value="hct">新竹物流</option>
+            <option value="post">中華郵政</option>
+            <option value="other">其他物流</option>
+          </select>
+          <button type="submit"
+            class="flex-1 sm:flex-none px-6 py-2 bg-slate-900 hover:bg-slate-800 text-white text-sm font-medium rounded-xl transition">
+            加入追蹤
+          </button>
+        </div>
+      </form>
+    </section>
+
+    <div id="filter-tabs" class="flex gap-2 overflow-x-auto pb-1 no-scrollbar"></div>
+
+    <section id="active-list" class="space-y-6"></section>
+
+    <section class="pt-4 border-t border-slate-200">
+      <div class="flex items-center justify-between mb-3">
+        <button id="toggle-completed" class="text-sm font-medium text-slate-500 hover:text-slate-800 flex items-center gap-1">
+          <span>已領取紀錄 (<span id="count-completed">0</span>)</span>
+          <span id="completed-arrow">▼</span>
+        </button>
+        <button id="clear-completed" class="text-xs text-rose-500 hover:underline hidden">清空歷史紀錄</button>
+      </div>
+      <div id="completed-list" class="space-y-2 hidden"></div>
+    </section>
+
+  </main>
+
+  <div id="toast" class="fixed bottom-6 left-1/2 -translate-x-1/2 bg-slate-900 text-white text-xs px-4 py-2.5 rounded-full shadow-lg hidden z-50"></div>
+
+  <script>
+    const CARRIERS = {
+      '711': {
+        name: '7-11 交貨便',
+        badge: 'bg-emerald-100 text-emerald-800 border-emerald-200',
+        url: 'https://eservice.7-11.com.tw/e-tracking/search.aspx'
+      },
+      'family': {
+        name: '全家店到店',
+        badge: 'bg-sky-100 text-sky-800 border-sky-200',
+        url: 'https://fmec.famiport.com.tw/FP_Entrance/QueryBox'
+      },
+      'shopee': {
+        name: '蝦皮店到店',
+        badge: 'bg-orange-100 text-orange-800 border-orange-200',
+        url: 'https://spx.tw/'
+      },
+      'tcat': {
+        name: '黑貓宅急便',
+        badge: 'bg-amber-100 text-amber-800 border-amber-200',
+        url: 'https://www.t-cat.com.tw/inquire/trace.aspx'
+      },
+      'hct': {
+        name: '新竹物流',
+        badge: 'bg-indigo-100 text-indigo-800 border-indigo-200',
+        url: 'https://www.hct.com.tw/Search/SearchGoods_n.aspx'
+      },
+      'post': {
+        name: '中華郵政',
+        badge: 'bg-teal-100 text-teal-800 border-teal-200',
+        url: 'https://postserv.post.gov.tw/pstmail/main_mail.html'
+      },
+      'other': {
+        name: '其他物流',
+        badge: 'bg-slate-200 text-slate-700 border-slate-300',
+        url: 'https://www.google.com/search?q='
+      }
+    };
+
+    function detectCarrier(code) {
+      const clean = code.trim().toUpperCase();
+      if (/^TW\d{10,14}[A-Z0-9]*$/.test(clean)) return 'shopee';
+      if (/^[A-Z]\d{11}$/.test(clean) || (/^[0-9]{12}$/.test(clean) && clean.startsWith('7'))) return '711';
+      if (/^(0|1|2)\d{10}$/.test(clean) || /^FM/.test(clean)) return 'family';
+      if (/^(6|8|9)\d{9,11}$/.test(clean)) return 'tcat';
+      if (/^\d{10}$/.test(clean)) return 'hct';
+      if (/^\d{14,20}$/.test(clean)) return 'post';
+      return 'other';
+    }
+
+    let packages = JSON.parse(localStorage.getItem('my_parcels_auto_v1') || '[]');
+    let currentFilter = 'ALL';
+    let showCompleted = false;
+
+    function savePackages() {
+      localStorage.setItem('my_parcels_auto_v1', JSON.stringify(packages));
+      render();
+    }
+
+    function showToast(msg) {
+      const toast = document.getElementById('toast');
+      toast.textContent = msg;
+      toast.classList.remove('hidden');
+      toast.classList.add('toast-enter');
+      clearTimeout(window.toastTimer);
+      window.toastTimer = setTimeout(() => {
+        toast.classList.add('hidden');
+      }, 3000);
+    }
+
+    function copyTextSync(text) {
+      let ok = false;
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.setAttribute('readonly', '');
+      textarea.style.position = 'fixed';
+      textarea.style.top = '0';
+      textarea.style.left = '0';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.focus();
+      textarea.select();
+      try {
+        ok = document.execCommand('copy');
+      } catch (e) {
+        ok = false;
+      }
+      document.body.removeChild(textarea);
+      if (!ok && navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(text).catch(() => {});
+      }
+      return ok;
+    }
+
+    function copyAndOpen(code, carrierKey) {
+      const copied = copyTextSync(code);
+      showToast(copied ? `已複製單號 ${code}` : `單號：${code}`);
+
+      const carrier = CARRIERS[carrierKey] || CARRIERS.other;
+      const targetUrl = carrierKey === 'other' ? `${carrier.url}${encodeURIComponent(code)}` : carrier.url;
+      const win = window.open(targetUrl, '_blank', 'noopener,noreferrer');
+      if (!win) {
+        window.location.href = targetUrl;
+      }
+    }
+
+    async function fetchTracking(id, code) {
+      showToast(`正在查詢 ${code} 最新貨態...`);
+      try {
+        const res = await fetch('/api/track', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code })
+        });
+        const result = await res.json();
+        if (!result.ok) {
+          showToast(result.error || '查詢失敗');
+          return;
+        }
+        const item = packages.find(p => p.id === id);
+        if (item) {
+          item.latestEvent = result.latestEvent;
+          if (/已配達|投遞成功|待取|已取件|delivered/i.test(`${result.latestEvent} ${result.statusText}`)) {
+            item.status = 'arrived';
+          }
+          savePackages();
+        }
+        showToast(result.latestEvent);
+      } catch (e) {
+        showToast('API 連線異常');
+      }
+    }
+
+    function toggleStatus(id) {
+      const item = packages.find(p => p.id === id);
+      if (item) {
+        item.status = item.status === 'shipping' ? 'arrived' : 'shipping';
+        savePackages();
+      }
+    }
+
+    function completePackage(id) {
+      const item = packages.find(p => p.id === id);
+      if (item) {
+        item.completed = true;
+        item.completedAt = new Date().toLocaleDateString('zh-TW');
+        savePackages();
+        showToast('已標記取貨並移入歷史紀錄');
+      }
+    }
+
+    function restorePackage(id) {
+      const item = packages.find(p => p.id === id);
+      if (item) {
+        item.completed = false;
+        savePackages();
+      }
+    }
+
+    function deletePackage(id) {
+      packages = packages.filter(p => p.id !== id);
+      savePackages();
+    }
+
+    document.getElementById('add-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const rawCode = document.getElementById('tracking-input').value.trim();
+      const name = document.getElementById('name-input').value.trim() || '未命名包裹';
+      const selectedCarrier = document.getElementById('carrier-select').value;
+
+      if (!rawCode) return;
+
+      const carrier = selectedCarrier === 'auto' ? detectCarrier(rawCode) : selectedCarrier;
+
+      packages.unshift({
+        id: Date.now().toString(),
+        code: rawCode,
+        name: name,
+        carrier: carrier,
+        status: 'shipping',
+        completed: false,
+        latestEvent: '',
+        createdAt: new Date().toLocaleDateString('zh-TW')
+      });
+
+      document.getElementById('tracking-input').value = '';
+      document.getElementById('name-input').value = '';
+      document.getElementById('carrier-select').value = 'auto';
+      savePackages();
+      showToast(`已新增至「${CARRIERS[carrier].name}」`);
+    });
+
+    function checkUrlParams() {
+      const params = new URLSearchParams(window.location.search);
+      const addCode = params.get('add');
+      if (addCode) {
+        const addName = params.get('name') || '捷徑新增包裹';
+        const carrier = detectCarrier(addCode);
+        packages.unshift({
+          id: Date.now().toString(),
+          code: addCode.trim(),
+          name: addName.trim(),
+          carrier: carrier,
+          status: 'shipping',
+          completed: false,
+          latestEvent: '',
+          createdAt: new Date().toLocaleDateString('zh-TW')
+        });
+        savePackages();
+        window.history.replaceState({}, document.title, window.location.pathname);
+        showToast(`已透過捷徑加入：${addCode}`);
+      }
+    }
+
+    document.getElementById('toggle-completed').addEventListener('click', () => {
+      showCompleted = !showCompleted;
+      document.getElementById('completed-list').classList.toggle('hidden', !showCompleted);
+      document.getElementById('clear-completed').classList.toggle('hidden', !showCompleted);
+      document.getElementById('completed-arrow').textContent = showCompleted ? '▲' : '▼';
+    });
+
+    document.getElementById('clear-completed').addEventListener('click', () => {
+      packages = packages.filter(p => !p.completed);
+      savePackages();
+      showToast('已清空歷史紀錄');
+    });
+
+    function render() {
+      const activeItems = packages.filter(p => !p.completed);
+      const completedItems = packages.filter(p => p.completed);
+
+      document.getElementById('count-arrived').textContent = activeItems.filter(p => p.status === 'arrived').length;
+      document.getElementById('count-shipping').textContent = activeItems.filter(p => p.status === 'shipping').length;
+      document.getElementById('count-completed').textContent = completedItems.length;
+
+      const filterContainer = document.getElementById('filter-tabs');
+      const usedCarriers = ['ALL', ...Object.keys(CARRIERS).filter(k => activeItems.some(p => p.carrier === k))];
+      filterContainer.innerHTML = usedCarriers.map(key => {
+        const label = key === 'ALL' ? `全部 (${activeItems.length})` : `${CARRIERS[key].name} (${activeItems.filter(p => p.carrier === key).length})`;
+        const isActive = currentFilter === key;
+        return `<button onclick="currentFilter='${key}';render()" class="whitespace-nowrap px-3.5 py-1.5 rounded-full text-xs font-medium transition ${isActive ? 'bg-slate-900 text-white' : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'}">${label}</button>`;
+      }).join('');
+
+      const activeContainer = document.getElementById('active-list');
+      const filtered = currentFilter === 'ALL' ? activeItems : activeItems.filter(p => p.carrier === currentFilter);
+
+      if (filtered.length === 0) {
+        activeContainer.innerHTML = `<div class="text-center py-12 text-slate-400 text-sm bg-white rounded-2xl border border-dashed border-slate-200">目前沒有待領取的包裹</div>`;
+      } else {
+        const grouped = {};
+        filtered.forEach(item => {
+          if (!grouped[item.carrier]) grouped[item.carrier] = [];
+          grouped[item.carrier].push(item);
+        });
+
+        activeContainer.innerHTML = Object.keys(grouped).map(carrierKey => {
+          const info = CARRIERS[carrierKey];
+          const cardsHtml = grouped[carrierKey].map(item => {
+            const isArrived = item.status === 'arrived';
+            return `
+              <div class="bg-white p-4 rounded-xl border ${isArrived ? 'border-amber-300 bg-amber-50/30' : 'border-slate-200'} shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div class="space-y-1.5">
+                  <div class="flex items-center gap-2 flex-wrap">
+                    <span class="font-semibold text-slate-900 text-sm">${item.name}</span>
+                    <button onclick="toggleStatus('${item.id}')" class="text-[11px] px-2 py-0.5 rounded-full font-medium cursor-pointer transition ${isArrived ? 'bg-amber-500 text-white' : 'bg-blue-100 text-blue-700 hover:bg-blue-200'}">
+                      ${isArrived ? '● 已到貨待領' : '● 運送中 (點擊切換)'}
+                    </button>
+                  </div>
+                  <div class="flex items-center gap-2 flex-wrap">
+                    <button onclick="copyAndOpen('${item.code}', '${item.carrier}')" class="font-mono text-sm text-slate-700 bg-slate-100 hover:bg-slate-200 px-2.5 py-1 rounded-lg flex items-center gap-1.5 transition">
+                      <span>${item.code}</span>
+                      <span class="text-[11px] text-slate-500">複製並查詢 ↗</span>
+                    </button>
+                    <span class="text-[11px] text-slate-400">${item.createdAt}</span>
+                  </div>
+                  ${item.latestEvent ? `<div class="text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-lg inline-block">最新貨態：${item.latestEvent}</div>` : ''}
+                </div>
+                <div class="flex items-center gap-2 self-end sm:self-center">
+                  <button onclick="fetchTracking('${item.id}', '${item.code}')" class="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-medium rounded-lg transition">
+                    查貨態
+                  </button>
+                  <button onclick="completePackage('${item.id}')" class="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-medium rounded-lg transition">
+                    ✓ 完成取貨
+                  </button>
+                  <button onclick="deletePackage('${item.id}')" class="p-1.5 text-slate-400 hover:text-rose-500 text-xs" title="刪除">
+                    ✕
+                  </button>
+                </div>
+              </div>
+            `;
+          }).join('');
+
+          return `
+            <div class="space-y-2.5">
+              <div class="flex items-center gap-2">
+                <span class="text-xs font-bold px-2.5 py-1 rounded-md border ${info.badge}">${info.name}</span>
+                <span class="text-xs text-slate-400">${grouped[carrierKey].length} 件</span>
+              </div>
+              <div class="space-y-2.5">${cardsHtml}</div>
+            </div>
+          `;
+        }).join('');
+      }
+
+      const completedContainer = document.getElementById('completed-list');
+      completedContainer.innerHTML = completedItems.map(item => `
+        <div class="bg-slate-100/80 px-4 py-2.5 rounded-xl flex items-center justify-between text-xs text-slate-500">
+          <div>
+            <span class="font-medium text-slate-700">${item.name}</span>
+            <span class="mx-1.5">·</span>
+            <span class="font-mono">${item.code}</span>
+            <span class="ml-1.5 text-[11px] text-slate-400">(${CARRIERS[item.carrier].name})</span>
+          </div>
+          <div class="flex items-center gap-3">
+            <button onclick="restorePackage('${item.id}')" class="text-blue-600 hover:underline">復原</button>
+            <button onclick="deletePackage('${item.id}')" class="text-slate-400 hover:text-rose-500">刪除</button>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    checkUrlParams();
+    render();
+  </script>
+</body>
+</html>
